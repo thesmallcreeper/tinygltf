@@ -3,6 +3,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "tiny_gltf.h"
 
+// Nlohmann json(include ../json.hpp)
+#include "json.hpp"
+
 #define CATCH_CONFIG_MAIN  // This tells Catch to provide a main() - only do this in one cpp file
 #include "catch.hpp"
 
@@ -89,6 +92,59 @@ TEST_CASE("extension-with-empty-object", "[issue-97]") {
     REQUIRE(m.materials.size() == 1);
     REQUIRE(m.materials[0].extensions.size() == 1);
     REQUIRE(m.materials[0].extensions.count("VENDOR_material_some_ext") == 1);
+  }
+
+}
+
+TEST_CASE("extension-overwrite", "[issue-261]") {
+
+  tinygltf::Model model;
+  tinygltf::TinyGLTF ctx;
+  std::string err;
+  std::string warn;
+
+  bool ret = ctx.LoadASCIIFromFile(&model, &err, &warn, "../models/Extensions-overwrite-issue261/issue-261.gltf");
+  if (!err.empty()) {
+    std::cerr << err << std::endl;
+  }
+  REQUIRE(true == ret);
+
+  REQUIRE(model.extensionsUsed.size() == 3);
+  {
+    bool has_ext_lights = false;
+    has_ext_lights |= (model.extensionsUsed[0].compare("KHR_lights_punctual") == 0);
+    has_ext_lights |= (model.extensionsUsed[1].compare("KHR_lights_punctual") == 0);
+    has_ext_lights |= (model.extensionsUsed[2].compare("KHR_lights_punctual") == 0);
+
+    REQUIRE(true == has_ext_lights);
+  }
+
+  {
+    REQUIRE(model.extensions.size() == 2);
+    REQUIRE(model.extensions.count("NV_MDL"));
+    REQUIRE(model.extensions.count("KHR_lights_punctual"));
+  }
+
+  // TODO(syoyo): create temp directory.
+  {
+    ret = ctx.WriteGltfSceneToFile(&model, "issue-261.gltf", true, true);
+    REQUIRE(true == ret);
+
+    tinygltf::Model m;
+
+    // read back serialized glTF
+    bool ret = ctx.LoadASCIIFromFile(&m, &err, &warn, "issue-261.gltf");
+    if (!err.empty()) {
+      std::cerr << err << std::endl;
+    }
+    REQUIRE(true == ret);
+
+    REQUIRE(m.extensionsUsed.size() == 3);
+
+    REQUIRE(m.extensions.size() == 2);
+    REQUIRE(m.extensions.count("NV_MDL"));
+    REQUIRE(m.extensions.count("KHR_lights_punctual"));
+
   }
 
 }
@@ -333,3 +389,96 @@ TEST_CASE("pbr-khr-texture-transform", "[material]") {
   REQUIRE(scale[1] == Approx(-1.0));
 
 }
+
+TEST_CASE("image-uri-spaces", "[issue-236]") {
+
+  tinygltf::Model model;
+  tinygltf::TinyGLTF ctx;
+  std::string err;
+  std::string warn;
+
+  // Test image file with single spaces.
+  bool ret = ctx.LoadASCIIFromFile(&model, &err, &warn, "../models/CubeImageUriSpaces/CubeImageUriSpaces.gltf");
+  if (!err.empty()) {
+    std::cerr << err << std::endl;
+  }
+
+  REQUIRE(true == ret);
+
+  // Test image file with a beginning space, trailing space, and greater than
+  // one consecutive spaces.
+  ret = ctx.LoadASCIIFromFile(&model, &err, &warn, "../models/CubeImageUriSpaces/CubeImageUriMultipleSpaces.gltf");
+  if (!err.empty()) {
+    std::cerr << err << std::endl;
+  }
+
+  REQUIRE(true == ret);
+}
+
+TEST_CASE("serialize-empty-material", "[issue-294]") {
+
+  tinygltf::Model m;
+
+  tinygltf::Material mat;
+  mat.pbrMetallicRoughness.baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f}; // default baseColorFactor
+  m.materials.push_back(mat);
+
+  std::stringstream os;
+
+  tinygltf::TinyGLTF ctx;
+  ctx.WriteGltfSceneToStream(&m, os, false, false);
+
+  // use nlohmann json
+  nlohmann::json j = nlohmann::json::parse(os.str());
+
+  REQUIRE(1 == j["materials"].size());
+  REQUIRE(j["materials"][0].is_object());
+
+}
+
+TEST_CASE("empty-skeleton-id", "[issue-321]") {
+
+  tinygltf::Model model;
+  tinygltf::TinyGLTF ctx;
+  std::string err;
+  std::string warn;
+
+  bool ret = ctx.LoadASCIIFromFile(&model, &err, &warn, "../models/regression/unassigned-skeleton.gltf");
+  if (!err.empty()) {
+    std::cerr << err << std::endl;
+  }
+  REQUIRE(true == ret);
+
+  REQUIRE(model.skins.size() == 1);
+  REQUIRE(model.skins[0].skeleton == -1); // unassigned
+
+  std::stringstream os;
+
+  ctx.WriteGltfSceneToStream(&model, os, false, false);
+
+  // use nlohmann json
+  nlohmann::json j = nlohmann::json::parse(os.str());
+
+  // Ensure `skeleton` property is not written to .gltf(was serialized as -1)
+  REQUIRE(1 == j["skins"].size());
+  REQUIRE(j["skins"][0].is_object());
+  REQUIRE(j["skins"][0].count("skeleton") == 0);
+
+}
+
+#ifndef TINYGLTF_NO_FS
+TEST_CASE("expandpath-utf-8", "[pr-226]") {
+
+  std::string s1 = "\xe5\xaf\xb9"; // utf-8 string
+
+  std::string ret = tinygltf::ExpandFilePath(s1, /* userdata */nullptr);
+
+  // expected: E5 AF B9
+  REQUIRE(3 == ret.size());
+
+  REQUIRE(0xe5 == static_cast<uint8_t>(ret[0]));
+  REQUIRE(0xaf == static_cast<uint8_t>(ret[1]));
+  REQUIRE(0xb9 == static_cast<uint8_t>(ret[2]));
+
+}
+#endif
